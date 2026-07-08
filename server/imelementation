@@ -1,0 +1,436 @@
+# Multi-Agent RAG Chatbot — Implementation Plan
+
+## Overview
+
+Build a **production-grade multi-agent RAG chatbot** on top of the existing FastAPI skeleton. The system orchestrates multiple AI agents using **LangGraph**, retrieves knowledge from **ChromaDB**, supports **tool calling**, is backed by both **AWS Bedrock** and **OpenAI** as LLM providers, deployed on **AWS** via **Terraform**, and exposed via a **FastAPI** REST API.
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| API Layer | FastAPI + Uvicorn |
+| Agent Orchestration | LangGraph (StateGraph, multi-agent supervisor) |
+| LLM Chain Logic | LangChain |
+| LLM Providers | AWS Bedrock (Claude 3, Titan) + OpenAI (GPT-4o) |
+| Vector Store | ChromaDB (local + persistent) |
+| RAG Pipeline | LangChain RAG + ChromaDB retriever |
+| Tool Calling | LangChain tools + LangGraph tool nodes |
+| **Authentication** | **Dual-layer: API Key + AWS Cognito JWT (RBAC)** |
+| Infrastructure | Terraform on AWS (ECS Fargate, ECR, S3, IAM, VPC, Cognito) |
+| Containerization | Docker + Docker Compose |
+| Config Management | Pydantic Settings + `.env` |
+
+---
+
+## Architecture Diagram
+
+```
+  Client / Frontend
+        │
+        ▼
+ ┌─────────────────────────────────────┐
+ │   Authentication Layer              │
+ │  ┌──────────────┐  ┌─────────────┐  │
+ │  │  API Key     │  │ Cognito JWT │  │
+ │  │ (M2M / CLI)  │  │ (User Auth) │  │
+ │  └──────────────┘  └─────────────┘  │
+ └──────────────────┬──────────────────┘
+                    │  (FastAPI Dependencies / Middleware)
+                    ▼
+        ┌──────────────────────────────┐
+        │       FastAPI (REST API)      │
+        │  POST /chat  │  POST /ingest  │
+        └──────────┬───────────┬────────┘
+                   │           │
+        ┌──────────▼───────────▼─────────┐
+        │     LangGraph Supervisor Agent   │
+        │  (routes queries to sub-agents)  │
+        └────┬──────────┬────────────┬────┘
+             │          │            │
+  ┌──────────▼──┐  ┌────▼──────┐  ┌─▼──────────────┐
+  │  RAG Agent  │  │ Tool Agent│  │ Conversation    │
+  │ (ChromaDB)  │  │ (web,calc)│  │ Agent (memory)  │
+  └──────┬──────┘  └────┬──────┘  └─┬──────────────┘
+         │              │             │
+  ┌──────▼──────────────▼─────────────▼──────┐
+  │          LLM Provider Router               │
+  │   AWS Bedrock (Claude/Titan)  │  OpenAI   │
+  └────────────────────────────────────────────┘
+         │
+  ┌──────▼──────────────────────┐
+  │  ChromaDB Vector Store       │
+  │  (Document Embeddings)       │
+  └─────────────────────────────┘
+```
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> Please review and answer these before I begin coding:
+
+1. **LLM Provider Priority**: Should the system default to **AWS Bedrock** or **OpenAI**? Or support dynamic switching per request?
+2. **AWS Bedrock Models**: Which model(s) to use — `anthropic.claude-3-5-sonnet`, `amazon.titan-text-express`, or others?
+3. **Document Ingestion**: What types of documents should be supported for RAG — PDF, TXT, DOCX, web URLs?
+4. **ChromaDB Mode**: Local persistent storage or hosted ChromaDB server?
+5. **Terraform Target**: Deploy to AWS ECS Fargate (serverless containers)? Or EC2?
+6. ✅ **Auth**: Confirmed — dual-layer auth (API Key + Cognito JWT) will be implemented with RBAC.
+7. **Memory/History**: Should conversation history be persisted (DynamoDB, Redis) or in-memory only?
+8. **Tools**: Which built-in tools should agents have? (e.g., web search via Tavily, calculator, code executor, weather API?)
+9. **Auth Roles**: Should there be two roles (`admin` and `user`) — where `admin` can ingest documents and manage collections, and `user` can only chat?
+
+---
+
+## Proposed Project Structure
+
+```
+d:\Dinesh\AI_Python_Project\
+├── app/
+│   ├── main.py                     # [MODIFY] FastAPI app entry point
+│   ├── __init__.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── deps.py                 # [NEW] FastAPI auth dependency injection
+│   │   ├── routes/
+│   │   │   ├── chat.py             # [NEW] POST /chat endpoint (auth required)
+│   │   │   ├── ingest.py           # [NEW] POST /ingest endpoint (admin only)
+│   │   │   ├── auth.py             # [NEW] POST /auth/token, /auth/refresh
+│   │   │   └── health.py           # [NEW] GET /health (public)
+│   ├── auth/                       # [NEW] Authentication module
+│   │   ├── __init__.py
+│   │   ├── api_key.py              # API key validator + hash storage
+│   │   ├── cognito.py              # Cognito JWT verifier (JWKS)
+│   │   ├── middleware.py           # Auth middleware (rate limiting + logging)
+│   │   ├── models.py               # User, Role, APIKey Pydantic models
+│   │   └── rbac.py                 # Role-based access control decorators
+│   ├── agents/                     # [NEW] LangGraph multi-agent system
+│   │   ├── __init__.py
+│   │   ├── supervisor.py           # Supervisor / router agent
+│   │   ├── rag_agent.py            # RAG retrieval agent
+│   │   ├── tool_agent.py           # Tool-calling agent
+│   │   └── conversation_agent.py   # Conversational memory agent
+│   ├── tools/                      # [NEW] LangChain custom tools
+│   │   ├── __init__.py
+│   │   ├── web_search.py           # Tavily / DuckDuckGo web search tool
+│   │   ├── calculator.py           # Math/calculation tool
+│   │   └── document_tool.py        # Document retrieval tool
+│   ├── chains/                     # [NEW] LangChain RAG chains
+│   │   ├── __init__.py
+│   │   ├── rag_chain.py            # RAG retrieval + QA chain
+│   │   └── conversation_chain.py   # Conversation with memory chain
+│   ├── vectorstore/                # [NEW] ChromaDB management
+│   │   ├── __init__.py
+│   │   ├── chroma_client.py        # ChromaDB client init
+│   │   └── embeddings.py           # Embedding model setup
+│   ├── llm/                        # [NEW] LLM provider abstraction
+│   │   ├── __init__.py
+│   │   ├── bedrock.py              # AWS Bedrock LLM setup
+│   │   ├── openai_llm.py           # OpenAI LLM setup
+│   │   └── router.py               # Provider selection logic
+│   ├── models/
+│   │   └── __init__.py
+│   ├── schemas/                    # Pydantic request/response models
+│   │   ├── __init__.py
+│   │   ├── chat.py                 # [NEW] ChatRequest, ChatResponse
+│   │   ├── ingest.py               # [NEW] IngestRequest, IngestResponse
+│   │   └── auth.py                 # [NEW] TokenRequest, TokenResponse
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── ingestion_service.py    # [NEW] Document loading + embedding
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── logger.py               # [NEW] Structured logging
+│   └── config.py                   # [NEW] Pydantic Settings / env config
+│
+├── terraform/                      # [NEW] AWS Infrastructure as Code
+│   ├── main.tf                     # Root Terraform config
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── modules/
+│   │   ├── ecs/                    # ECS Fargate task + service
+│   │   ├── ecr/                    # ECR container registry
+│   │   ├── vpc/                    # VPC, subnets, security groups
+│   │   ├── iam/                    # IAM roles (Bedrock + Cognito access)
+│   │   ├── cognito/                # [NEW] Cognito User Pool + App Client
+│   │   ├── api_gateway/            # [NEW] API Gateway with Cognito authorizer
+│   │   └── s3/                     # S3 bucket for document uploads
+│
+├── chroma_data/                    # [NEW] Local ChromaDB persistent storage
+├── docs/                           # [NEW] Sample documents for RAG
+├── Dockerfile                      # [NEW] Container definition
+├── docker-compose.yml              # [NEW] Local dev orchestration
+├── .env.example                    # [NEW] Environment variable template
+└── requirements.txt                # [MODIFY] All dependencies
+```
+
+---
+
+## Proposed Changes
+
+### 1. Configuration & Dependencies
+
+#### [MODIFY] [requirements.txt](file:///d:/Dinesh/AI_Python_Project/requirements.txt)
+Add all required packages:
+- `fastapi`, `uvicorn[standard]`
+- `langchain`, `langchain-community`, `langchain-aws`, `langchain-openai`
+- `langgraph`
+- `chromadb`
+- `boto3`, `botocore` (AWS SDK)
+- `openai`
+- `pydantic-settings`
+- `python-multipart` (file uploads)
+- `pypdf`, `docx2txt`, `unstructured` (document loaders)
+- `tavily-python` (web search tool)
+- `sentence-transformers` (local embeddings fallback)
+- `python-jose[cryptography]` (JWT decode/verify)
+- `passlib[bcrypt]` (API key hashing)
+- `httpx` (async HTTP for JWKS fetching)
+
+#### [NEW] `.env.example`
+Template for all required environment variables (AWS credentials, OpenAI key, ChromaDB path, model names).
+
+#### [NEW] `app/config.py`
+Pydantic `BaseSettings` class to load and validate all environment variables.
+
+---
+
+### 2. LLM Provider Layer
+
+#### [NEW] `app/llm/bedrock.py`
+- Initializes `ChatBedrock` from `langchain_aws`
+- Supports models: `anthropic.claude-3-5-sonnet-20241022-v2:0`, `amazon.titan-text-express-v1`
+- Configured with AWS region + credentials from env
+
+#### [NEW] `app/llm/openai_llm.py`
+- Initializes `ChatOpenAI` from `langchain_openai`
+- Supports GPT-4o, GPT-3.5-turbo
+
+#### [NEW] `app/llm/router.py`
+- `get_llm(provider: str)` factory function
+- Selects Bedrock or OpenAI based on config or per-request param
+
+---
+
+### 3. Vector Store & Embeddings
+
+#### [NEW] `app/vectorstore/chroma_client.py`
+- Persistent ChromaDB client pointing to `./chroma_data`
+- Collection management (create, get, delete)
+
+#### [NEW] `app/vectorstore/embeddings.py`
+- AWS Bedrock Titan Embeddings (`amazon.titan-embed-text-v2:0`)
+- Fallback to OpenAI embeddings or `sentence-transformers`
+
+---
+
+### 4. RAG Pipeline
+
+#### [NEW] `app/services/ingestion_service.py`
+- `ingest_documents(files, collection_name)` function
+- Supports PDF, TXT, DOCX via LangChain document loaders
+- Splits text with `RecursiveCharacterTextSplitter`
+- Embeds and stores in ChromaDB
+
+#### [NEW] `app/chains/rag_chain.py`
+- Creates a retrieval QA chain: ChromaDB retriever → LLM
+- Returns answer + source documents
+
+---
+
+### 5. LangGraph Multi-Agent System
+
+#### [NEW] `app/agents/supervisor.py`
+- LangGraph `StateGraph` with a **Supervisor** node
+- Routes to `rag_agent`, `tool_agent`, or `conversation_agent` based on intent
+- Uses LLM to decide routing
+
+#### [NEW] `app/agents/rag_agent.py`
+- Wraps the RAG chain
+- Retrieves relevant documents and generates grounded answers
+
+#### [NEW] `app/agents/tool_agent.py`
+- LangGraph `ToolNode` with bound tools
+- Uses ReAct pattern: Thought → Action (tool call) → Observation → Answer
+
+#### [NEW] `app/agents/conversation_agent.py`
+- Maintains conversation history using `ConversationBufferMemory`
+- Handles general chat without document retrieval
+
+---
+
+### 6. Tools
+
+#### [NEW] `app/tools/web_search.py`
+- Tavily Search tool via `TavilySearchResults`
+
+#### [NEW] `app/tools/calculator.py`
+- Math expression evaluator tool
+
+#### [NEW] `app/tools/document_tool.py`
+- RAG retrieval as a LangChain tool (usable by the tool agent)
+
+---
+
+### 7. Authentication System
+
+> [!IMPORTANT]
+> All protected endpoints require either a valid **API Key** (header `X-API-Key`) or a **Cognito JWT Bearer token**. Public endpoints (`/health`, `/auth/token`) are excluded.
+
+#### Authentication Flow
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Two Authentication Methods (both supported):            │
+│                                                          │
+│  1. API Key (Machine-to-Machine)                         │
+│     Header: X-API-Key: <hashed-key>                      │
+│     → Validated against DB/env stored hashed keys        │
+│     → Role assigned at key creation time                 │
+│                                                          │
+│  2. Cognito JWT (User-facing / Frontend)                 │
+│     Header: Authorization: Bearer <jwt-token>            │
+│     → Token issued by AWS Cognito User Pool              │
+│     → Verified via Cognito JWKS endpoint                 │
+│     → Claims decoded: sub, email, cognito:groups (roles) │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Role-Based Access Control (RBAC)
+
+| Role | Permissions |
+|---|---|
+| `admin` | All endpoints: `/chat`, `/ingest`, `/collections`, `/health` |
+| `user` | Chat only: `/chat`, `/health` |
+| `anonymous` | Public only: `/health` |
+
+#### [NEW] `app/auth/cognito.py`
+- Fetches Cognito JWKS from `https://cognito-idp.{region}.amazonaws.com/{pool_id}/.well-known/jwks.json`
+- Caches JWKS with TTL (refreshed every 24h)
+- Validates JWT: signature, expiry, issuer, audience
+- Extracts `sub`, `email`, and `cognito:groups` claims
+- Raises `HTTP 401` on invalid/expired tokens
+
+#### [NEW] `app/auth/api_key.py`
+- `APIKey` stored with: `key_id`, `hashed_key` (bcrypt), `role`, `name`, `created_at`, `is_active`
+- Keys stored in a simple JSON file or env variable for MVP; pluggable to DynamoDB later
+- `verify_api_key(plain_key)` → validates hash and returns associated role
+- Key generation utility: `generate_api_key()` → returns `prefix.random_secret`
+
+#### [NEW] `app/auth/rbac.py`
+- `require_role(*roles)` → FastAPI dependency that checks current user role
+- `get_current_user(request)` → tries API key first, then Cognito JWT
+- Returns a unified `CurrentUser(sub, email, role, auth_method)` object
+
+#### [NEW] `app/auth/middleware.py`
+- Request logging middleware: logs `user_id`, `endpoint`, `auth_method`, `latency`
+- Rate limiting per user/IP (configurable via env: `RATE_LIMIT_PER_MINUTE`)
+
+#### [NEW] `app/api/deps.py`
+FastAPI dependency shortcuts:
+```python
+get_current_user         # Any authenticated user
+require_admin            # Admin role only
+require_user_or_admin    # User or Admin role
+```
+
+#### [NEW] `app/api/routes/auth.py`
+```
+POST /auth/token          → Exchange Cognito credentials for JWT (proxy)
+POST /auth/api-key        → Generate a new API key (admin only)
+DELETE /auth/api-key/{id} → Revoke an API key (admin only)
+GET  /auth/me             → Return current user info from token
+```
+
+---
+
+### 8. API Routes
+
+#### [MODIFY] `app/main.py`
+- Mount routers for `/chat`, `/ingest`, `/auth`, `/health`
+- Add CORS middleware
+- Add `TrustedHostMiddleware` for security
+- Startup/shutdown lifecycle events (initialize ChromaDB, LLM clients, JWKS cache)
+
+#### [NEW] `app/api/routes/chat.py`
+```
+POST /chat
+Headers: X-API-Key OR Authorization: Bearer <token>
+Body: { "message": str, "session_id": str, "provider": "bedrock"|"openai" }
+Response: { "response": str, "sources": list, "agent_used": str, "user": str }
+Auth: require_user_or_admin
+```
+
+#### [NEW] `app/api/routes/ingest.py`
+```
+POST /ingest
+Headers: X-API-Key OR Authorization: Bearer <token>
+Body: multipart/form-data with files + collection_name
+Response: { "status": "success", "chunks_added": int }
+Auth: require_admin
+```
+
+#### [NEW] `app/schemas/chat.py`, `app/schemas/ingest.py`, `app/schemas/auth.py`
+- Pydantic v2 request/response models including `TokenResponse`, `APIKeyResponse`
+
+---
+
+### 9. Infrastructure (Terraform)
+
+#### [NEW] `terraform/` directory
+- **VPC Module**: VPC, public/private subnets, NAT gateway, security groups
+- **ECR Module**: Container registry for the Docker image
+- **ECS Module**: Fargate cluster, task definition, service, ALB
+- **IAM Module**: Task execution role with Bedrock `InvokeModel` + Cognito `AdminInitiateAuth` permissions
+- **S3 Module**: Bucket for document uploads
+- **Cognito Module** *(new)*:
+  - `aws_cognito_user_pool` with email verification, password policy, MFA optional
+  - `aws_cognito_user_pool_client` for the FastAPI backend app
+  - `aws_cognito_user_group` for `admin` and `user` groups
+- **API Gateway Module** *(new)*:
+  - REST API Gateway in front of the ALB
+  - `aws_api_gateway_authorizer` backed by the Cognito User Pool
+  - Usage plans + API key quota for machine-to-machine access
+
+---
+
+### 10. Containerization
+
+#### [NEW] `Dockerfile`
+- Multi-stage build: Python 3.11 slim
+- Copies app, installs requirements, exposes port 8000
+
+#### [NEW] `docker-compose.yml`
+- `api` service: the FastAPI app
+- `chromadb` service: ChromaDB standalone server (optional)
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Unit test LLM router selection
+- Unit test ChromaDB ingestion
+- Integration test: `POST /ingest` → `POST /chat` full round-trip
+
+### Manual Verification
+- Run `docker-compose up` locally and test with Swagger UI at `http://localhost:8000/docs`
+- Upload a sample PDF, then ask a question about it via `/chat`
+- Verify agent routing (RAG vs Tool vs Conversation paths)
+- Apply Terraform and verify ECS service health on AWS
+
+---
+
+## Implementation Phases
+
+| Phase | Scope |
+|---|---|
+| **Phase 1** | Config, requirements, LLM providers, ChromaDB setup |
+| **Phase 2** | RAG pipeline (ingestion + retrieval chain) |
+| **Phase 3** | LangGraph agents (supervisor + sub-agents + tools) |
+| **Phase 4** | 🔐 **Authentication** — API Key + Cognito JWT + RBAC middleware |
+| **Phase 5** | FastAPI routes + schemas (with auth dependencies wired in) |
+| **Phase 6** | Docker + docker-compose local dev |
+| **Phase 7** | Terraform AWS infrastructure (incl. Cognito + API Gateway modules) |

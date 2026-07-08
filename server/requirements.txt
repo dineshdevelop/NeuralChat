@@ -1,0 +1,114 @@
+# =============================================================================
+# Multi-Agent RAG Chatbot — Python Dependencies
+# =============================================================================
+# Install with: pip install -r requirements.txt
+# Python version: 3.11+
+
+# -----------------------------------------------------------------------------
+# 1. API Framework
+# FastAPI is a modern, fast web framework for building APIs with Python.
+# Uvicorn is the ASGI server that actually runs FastAPI.
+# python-multipart is needed for file uploads (POST /ingest).
+# -----------------------------------------------------------------------------
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# -----------------------------------------------------------------------------
+# 2. LangChain Core
+# langchain          → core chains, memory, document loaders, text splitters
+# langchain-community → third-party integrations (Chroma, loaders, etc.)
+# langchain-aws      → AWS Bedrock integration (ChatBedrock, Titan embeddings)
+# langchain-openai   → OpenAI integration (ChatOpenAI, OpenAIEmbeddings)
+# -----------------------------------------------------------------------------
+langchain==0.3.9
+langchain-community==0.3.9
+langchain-aws==0.2.7
+langchain-openai==0.2.10
+
+# -----------------------------------------------------------------------------
+# 3. LangGraph
+# LangGraph lets you build stateful, multi-actor applications with LLMs.
+# It uses a graph-based approach: nodes = agents/tools, edges = routing logic.
+# -----------------------------------------------------------------------------
+langgraph==0.2.55
+
+# -----------------------------------------------------------------------------
+# 4. Vector Store — ChromaDB
+# ChromaDB is an open-source AI-native embedding database.
+# We use it to store and retrieve document embeddings for RAG.
+# -----------------------------------------------------------------------------
+chromadb==0.5.23
+langchain-chroma==1.1.0          # LangChain's official ChromaDB integration (separate package)
+
+# -----------------------------------------------------------------------------
+# 5. AWS SDK
+# boto3   → AWS SDK for Python (Bedrock, S3, DynamoDB, Cognito calls)
+# botocore → low-level foundation for boto3
+# -----------------------------------------------------------------------------
+boto3==1.35.71
+botocore==1.35.71
+
+# -----------------------------------------------------------------------------
+# 6. OpenAI
+# The official OpenAI Python SDK. Used both directly and via langchain-openai.
+# -----------------------------------------------------------------------------
+openai==1.55.3
+
+# -----------------------------------------------------------------------------
+# 7. Configuration Management
+# pydantic-settings → reads config from .env files and environment variables
+# python-dotenv     → loads .env files into os.environ
+# -----------------------------------------------------------------------------
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# -----------------------------------------------------------------------------
+# 8. Document Loaders (for RAG ingestion pipeline)
+# pypdf      → reads and extracts text from PDF files
+# docx2txt   → extracts text from .docx Word files
+# unstructured → powerful library for parsing many file types (HTML, PPT, etc.)
+# -----------------------------------------------------------------------------
+pypdf==5.1.0
+docx2txt==0.8
+unstructured>=0.16.19
+
+# -----------------------------------------------------------------------------
+# 9. Tools for Agents
+# tavily-python → Tavily Search API (web search tool for agents)
+# -----------------------------------------------------------------------------
+tavily-python==0.5.0
+
+# -----------------------------------------------------------------------------
+# 10. Embeddings Fallback
+# sentence-transformers → runs embedding models locally (no API key needed)
+# Useful when you want to avoid API costs during development/testing.
+# -----------------------------------------------------------------------------
+sentence-transformers==3.3.1
+
+# -----------------------------------------------------------------------------
+# 11. Authentication
+# python-jose[cryptography] → JWT decode/encode (used to verify Cognito tokens)
+# passlib[bcrypt]           → password/API key hashing with bcrypt
+# httpx                     → async HTTP client (used to fetch Cognito JWKS)
+# -----------------------------------------------------------------------------
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+httpx==0.27.2
+
+# -----------------------------------------------------------------------------
+# 12. Logging & Observability
+# structlog → structured logging (outputs JSON logs in production)
+# rich      → beautiful terminal output (colored logs in development)
+# -----------------------------------------------------------------------------
+structlog==24.4.0
+rich==13.9.4
+
+# -----------------------------------------------------------------------------
+# 13. Testing (optional, for Phase verification)
+# pytest         → test runner
+# pytest-asyncio → async test support (needed for FastAPI async endpoints)
+# httpx          → also used as the async test client for FastAPI
+# -----------------------------------------------------------------------------
+pytest==8.3.3
+pytest-asyncio==0.24.0

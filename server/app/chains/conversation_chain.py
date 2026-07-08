@@ -10,40 +10,34 @@
 #   • Answer follow-up questions ("and what about the second one?")
 #   • Maintain context across multiple turns
 #
-# Memory in LangChain:
-#   LangChain provides several memory types:
+# Memory Strategy (Modern LangGraph approach):
+#   We maintain a dict of ChatMessageHistory objects keyed by session_id.
+#   Instead of the deprecated RunnableWithMessageHistory wrapper, we manually
+#   inject history into the prompt and persist the turn ourselves.
+#   This is the pattern recommended by LangGraph's built-in persistence docs.
 #
-#   • ConversationBufferMemory
-#       Stores ALL messages (human + AI) in memory.
-#       Simple, but gets expensive for very long conversations.
-#
-#   • ConversationBufferWindowMemory
-#       Only keeps the last K messages. Good for keeping tokens manageable.
-#
-#   • ConversationSummaryMemory
-#       Summarizes older messages to reduce token count.
-#       Loses some detail but great for very long conversations.
-#
-# We use ConversationBufferWindowMemory (last 10 turns) for a good balance
-# of context vs. cost.
+# Provider Fallback:
+#   If the primary provider (Bedrock) returns a ThrottlingException or any
+#   quota/rate-limit error, the chain automatically retries with OpenAI.
+#   This prevents hard failures when daily token limits are hit.
 #
 # Session Management:
 #   Each conversation has a unique session_id.
-#   We maintain a dictionary of memories keyed by session_id.
+#   We maintain a dictionary of histories keyed by session_id.
 #   This simulates server-side session storage (for MVP; use Redis in production).
 #
 # 🚨 Production Note:
 #   In-memory session storage is lost on server restart.
-#   For production, replace _session_memories with Redis + LangChain's
-#   RedisChatMessageHistory for persistent, distributed conversation history.
+#   For production, replace _session_histories with a LangGraph checkpointer
+#   (e.g., AsyncSqliteSaver or AsyncRedisSaver) for persistent, distributed
+#   conversation history.
 # =============================================================================
 
 from typing import Any, Optional
 
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
 from app.llm.router import get_llm
@@ -55,7 +49,7 @@ logger = get_logger(__name__)
 # In-memory session store
 # =============================================================================
 # Maps session_id → ChatMessageHistory instance.
-# 🚨 MVP only — replace with Redis for production multi-instance deployments.
+# 🚨 MVP only — replace with a LangGraph checkpointer for production.
 # =============================================================================
 _session_histories: dict[str, ChatMessageHistory] = {}
 
@@ -66,9 +60,8 @@ def get_session_history(session_id: str) -> ChatMessageHistory:
 
     🧠 LEARNING NOTE — ChatMessageHistory:
     This stores a list of messages (HumanMessage, AIMessage) in memory.
-    RunnableWithMessageHistory uses this to:
-      1. Load previous messages and inject into the prompt
-      2. Save new messages after each turn
+    We load these messages manually and inject them into the prompt before
+    calling the LLM, then save the new turn after getting a response.
 
     Parameters:
       session_id → unique identifier for the conversation
